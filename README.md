@@ -50,4 +50,3 @@ readme_content = """# KAI - Xposed Hook 模块
 ---
 
 > 作者: 探长鸽鸽 | QQ群: 709496957
-"""
