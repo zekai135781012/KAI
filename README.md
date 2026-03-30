@@ -1,35 +1,73 @@
-# KAI - Xposed Hook 模块
+readme_content = """# KAI - Xposed Hook 模块
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Platform](https://img.shields.io/badge/Platform-Android-green.svg)](https://www.android.com)
-[![API](https://img.shields.io/badge/API-26%2B-orange.svg)](https://developer.android.com/studio/releases/platforms)
+一个基于 Xposed 框架的 Android Hook 模块，提供应用 VIP 解锁、弹窗屏蔽、文本替换等功能。
 
-> 一个基于 Xposed 框架的 Android Hook 模块，采用 Jetpack Compose 构建现代化 UI 界面。
+## 功能特性
 
-## ✨ 特性
+- **VIP 解锁**: 支持多邻国、快对作业、Fake Location、小X分身等 12+ 应用
+- **弹窗屏蔽**: 智能拦截指定关键词弹窗
+- **文本替换**: 动态替换应用内文本内容
+- **规则管理**: 可视化配置，独立生效不干扰
 
-- 🎨 **Material Design 3** - 采用 Jetpack Compose 构建的现代化 UI
-- 🔧 **模块化 Hook 架构** - 支持多应用独立 Hook 实现
-- 📱 **应用管理界面** - 直观的适配应用列表与状态展示
-- 🛡️ **弹窗屏蔽系统** - 基于规则引擎的 Dialog 拦截功能
-- ⚙️ **配置持久化** - 通过 ContentProvider 实现应用与 Xposed 进程间配置共享
+## 支持应用
 
-## 📋 适配应用列表
+| 应用 | 功能 |
+|------|------|
+| 多邻国 | MAX会员、去广告、无限红心 |
+| 快对作业 | VIP解锁、图片导出、去限制 |
+| Fake Location | 专业版解锁 |
+| 小X分身 | 本地会员 |
+| 安卓清理君 | 免登录会员 |
+| 一木记账 | 永久会员 |
+| 小白录屏 | 本地会员 |
+| 葫芦侠 | 主题解锁、评论恢复 |
+| 倒数日 | 会员解锁 |
+| Soul | 去聊天限制 |
+| 绿茶VPN | 钻石VIP |
 
-| 应用名称 | 包名 | Hook 功能 |
-|---------|------|----------|
-| 小x分身 | `com.bly.dkplat` | 解锁本地会员、去广告 |
-| 安卓清理君 | `com.magicalstory.cleaner` | 解锁本地会员、免登录 |
-| Fake Location | `com.lerist.fakelocation` | 解锁专业版 |
-| 多邻国 | `com.duolingo` | 去广告、MAX会员、无限红心 |
-| TapTap | `com.taptap` | 伪造购买、破解授权 |
-| 葫芦侠 | `com.huluxia.gametools` | 解锁主题、恢复评论 |
-| 一木记账 | `com.wangc.bill` | 解锁本地会员 |
-| 小白录屏 | `com.xiaobai.screen.record` | 解锁本地会员 |
-| 快对作业 | `com.kuaiduizuoye.scan` | 解锁VIP、去广告、图片导出 |
-| 绿茶VPN | `com.abglvcha.main` | 解锁钻石VIP |
-| Soul | `cn.soulapp.android` | 去聊天限制、消息撤回 |
-| 倒数日 | `com.clover.daysmatter` | 解锁会员 |
+## 技术栈
 
-## 🏗️ 项目架构
+- **框架**: Xposed / LSPosed
+- **UI**: Jetpack Compose + Material3
+- **语言**: Kotlin + Java
+- **最低版本**: Android 8.0 (API 26)
 
+## 项目结构
+
+```
+com.example.kai/
+├── HookEntry.java          # Xposed 入口
+├── MainActivity.kt         # Compose 主界面
+├── ConfigManager.kt        # 规则配置管理
+├── ComponentBlocker.kt     # 弹窗/文本拦截核心
+├── ui/                     # Compose 界面组件
+│   ├── HomeScreen.kt       # 首页
+│   ├── AppsListScreen.kt   # 适配应用列表
+│   └── ExpandScreen.kt     # 应用管理/规则配置
+└── hooks/                  # 各应用 Hook 实现
+    ├── Duolingo.java
+    ├── KuaiDuiZuoYe.java
+    └── ...
+```
+
+## 使用说明
+
+1. 安装 LSPosed 框架并启用模块
+2. 在模块作用域中勾选目标应用
+3. 重启目标应用即可生效
+4. 部分应用支持设置界面（如快对作业在设置页长按）
+
+## 免责声明
+
+仅供学习研究，请勿用于商业用途。使用造成的后果作者不承担责任。
+
+## 鸣谢
+
+- MT论坛、挽梦遗酒、dusheling、OctoberSama、JiGuro
+
+---
+
+> 作者: 探长鸽鸽 | QQ群: 709496957
+"""
+
+print(readme_content)
