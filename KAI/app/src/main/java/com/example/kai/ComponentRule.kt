@@ -1,13 +1,8 @@
 package com.example.kai
 
-enum class TargetType { 
-    DIALOG_TEXT
-}
+enum class TargetType { DIALOG_TEXT, TEXT_REPLACE }
 
-enum class Action { 
-    CLOSE,
-    CANCELABLE
-}
+enum class Action { CLOSE, CANCELABLE }
 
 data class ComponentRule(
     val id: Long = System.currentTimeMillis(),
@@ -15,9 +10,10 @@ data class ComponentRule(
     val targetType: TargetType,
     val targetValue: String,
     val action: Action = Action.CLOSE,
+    val replaceText: String = "",
     val enabled: Boolean = true,
     val description: String = "",
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis()  // 添加这一行
 )
 
 data class RuleGroup(
