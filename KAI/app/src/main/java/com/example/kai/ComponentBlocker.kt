@@ -8,177 +8,173 @@ import de.robv.android.xposed.XC_MethodHook
 import de.robv.android.xposed.XposedBridge
 import de.robv.android.xposed.XposedHelpers
 import de.robv.android.xposed.callbacks.XC_LoadPackage
-import java.util.concurrent.ConcurrentHashMap
 import java.util.regex.Pattern
 
-object DialogBlocker {
-    
-    private val packageRulesCache = ConcurrentHashMap<String, List<DialogRule>>()
-    
-    data class DialogRule(
-        val keyword: String,
-        val pattern: Pattern?,
-        val action: Action
-    )
-    
+object ComponentBlocker {
+
     @JvmStatic
-    fun handleLoadPackage(lp: XC_LoadPackage.LoadPackageParam) {
-        val pkg = lp.packageName
-        
-        // 跳过系统应用和自身
-        if (pkg.startsWith("android.") || 
-            pkg.startsWith("com.android.") || 
-            pkg == "com.example.kai") {
-            return
+    fun handleLoadPackage(lpparam: XC_LoadPackage.LoadPackageParam) {
+        val pkg = lpparam.packageName
+        XposedBridge.log("ComponentBlocker: 处理应用 $pkg")
+
+        val allRules = ConfigManager.INSTANCE.loadRules(false)
+        val appRules = allRules.filter { it.packageName == pkg && it.enabled }
+        val dialogRules = appRules.filter { it.targetType == TargetType.DIALOG_TEXT }
+        val textRules = appRules.filter { it.targetType == TargetType.TEXT_REPLACE }
+
+        XposedBridge.log("ComponentBlocker: $pkg 弹窗规则 ${dialogRules.size} 条, 文本规则 ${textRules.size} 条")
+
+        dialogRules.forEachIndexed { index, rule ->
+            XposedBridge.log("ComponentBlocker: 弹窗规则[$index]: '${rule.targetValue}' -> ${rule.action}")
         }
-        
+        textRules.forEachIndexed { index, rule ->
+            XposedBridge.log("ComponentBlocker: 文本规则[$index]: '${rule.targetValue}' -> '${rule.replaceText}'")
+        }
+
+        if (dialogRules.isNotEmpty()) {
+            hookDialogBlock(lpparam, dialogRules)
+        }
+        if (textRules.isNotEmpty()) {
+            hookTextViewReplace(lpparam, textRules)
+        }
+    }
+
+    // ==================== 弹窗拦截 ====================
+    private fun hookDialogBlock(lpparam: XC_LoadPackage.LoadPackageParam, rules: List<ComponentRule>) {
+        val pkg = lpparam.packageName
         try {
-            // 从 ConfigManager 加载规则
-            val rules = ConfigManager.loadRules()
-                .filter { it.packageName == pkg && it.enabled && it.targetType == TargetType.DIALOG_TEXT }
-            
-            if (rules.isEmpty()) {
-                return
-            }
-            
-            XposedBridge.log("DialogBlocker: $pkg 加载 ${rules.size} 条弹窗规则")
-            
-            rules.forEach { rule ->
-                XposedBridge.log("  - 关键词: ${rule.targetValue} -> ${rule.action}")
-            }
-            
-            val dialogRules = rules.map { rule ->
+            val targetRules = rules.map { rule ->
                 DialogRule(
-                    keyword = rule.targetValue,
-                    pattern = try { Pattern.compile(rule.targetValue, Pattern.CASE_INSENSITIVE) } catch (e: Exception) { null },
+                    pattern = Pattern.compile(rule.targetValue, Pattern.CASE_INSENSITIVE),
                     action = rule.action
                 )
             }
-            packageRulesCache[pkg] = dialogRules
-            
-            // Hook Dialog.show() 方法
-            hookDialogShow(dialogRules)
-            
-            // Hook Dialog.setCancelable() 方法
-            hookDialogCancelable(dialogRules)
-            
+            hookDialogClass(android.app.Dialog::class.java, pkg, targetRules, "android.app.Dialog")
+
+            val dialogSubClasses = listOf(
+                "android.app.AlertDialog",
+                "android.app.Presentation",
+                "androidx.appcompat.app.AlertDialog",
+                "androidx.appcompat.app.AppCompatDialog",
+                "com.google.android.material.bottomsheet.BottomSheetDialog",
+                "com.google.android.material.dialog.MaterialAlertDialog",
+                "androidx.fragment.app.DialogFragment",
+                "moe.shizuku.dialog.DialogFragment",
+                "com.android.internal.app.AlertController"
+            )
+
+            dialogSubClasses.forEach { className ->
+                try {
+                    val clazz = XposedHelpers.findClass(className, lpparam.classLoader)
+                    hookDialogClass(clazz, pkg, targetRules, className)
+                } catch (e: Throwable) {
+                }
+            }
+            XposedBridge.log("ComponentBlocker: $pkg 弹窗Hook已启用")
         } catch (e: Throwable) {
-            XposedBridge.log("DialogBlocker: $pkg 错误 - ${e.message}")
+            XposedBridge.log("ComponentBlocker: $pkg 弹窗Hook错误: ${e.message}")
         }
     }
-    
-    private fun hookDialogShow(rules: List<DialogRule>) {
-        XposedHelpers.findAndHookMethod(
-            Dialog::class.java,
-            "show",
-            object : XC_MethodHook() {
-                override fun afterHookedMethod(param: MethodHookParam) {
-                    val dialog = param.thisObject as Dialog
-                    
-                    try {
-                        val textList = getAllDialogText(dialog)
-                        if (textList.isEmpty()) return
-                        
-                        rules.forEach { rule ->
-                            val matched = textList.any { text ->
-                                if (rule.pattern != null) {
-                                    rule.pattern.matcher(text).find()
-                                } else {
-                                    text.contains(rule.keyword, ignoreCase = true)
-                                }
-                            }
-                            
-                            if (matched) {
-                                XposedBridge.log("DialogBlocker: 检测到匹配弹窗 - 关键词: ${rule.keyword}")
-                                
-                                when (rule.action) {
-                                    Action.CLOSE -> {
-                                        dialog.dismiss()
-                                        XposedBridge.log("DialogBlocker: 弹窗已关闭")
-                                    }
-                                    Action.CANCELABLE -> {
-                                        dialog.setCancelable(true)
-                                        XposedBridge.log("DialogBlocker: 弹窗已设置为可取消")
-                                    }
-                                }
-                            }
-                        }
-                    } catch (e: Exception) {
-                        XposedBridge.log("DialogBlocker: 弹窗检测失败 - ${e.message}")
-                    }
-                }
-            }
-        )
-    }
-    
-    private fun hookDialogCancelable(rules: List<DialogRule>) {
-        XposedHelpers.findAndHookMethod(
-            Dialog::class.java,
-            "setCancelable",
-            Boolean::class.java,
-            object : XC_MethodHook() {
-                override fun beforeHookedMethod(param: MethodHookParam) {
-                    val dialog = param.thisObject as Dialog
-                    val setCancelable = param.args[0] as Boolean
-                    
-                    if (setCancelable) return
-                    
-                    try {
-                        val textList = getAllDialogText(dialog)
-                        if (textList.isEmpty()) return
-                        
-                        rules.forEach { rule ->
-                            val matched = textList.any { text ->
-                                if (rule.pattern != null) {
-                                    rule.pattern.matcher(text).find()
-                                } else {
-                                    text.contains(rule.keyword, ignoreCase = true)
-                                }
-                            }
-                            
-                            if (matched && rule.action == Action.CANCELABLE) {
-                                param.args[0] = true
-                                XposedBridge.log("DialogBlocker: 强制设置弹窗可取消 - 关键词: ${rule.keyword}")
-                            }
-                        }
-                    } catch (e: Exception) {
-                        XposedBridge.log("DialogBlocker: 设置可取消失败 - ${e.message}")
-                    }
-                }
-            }
-        )
-    }
-    
-    private fun getAllDialogText(dialog: Dialog): List<String> {
-        val textList = mutableListOf<String>()
+
+    private fun hookDialogClass(
+        dialogClass: Class<*>, pkg: String, targetRules: List<DialogRule>, className: String
+    ) {
         try {
-            val decorView = dialog.window?.decorView
-            if (decorView != null) {
-                collectTextViewText(decorView, textList)
-            }
-        } catch (e: Exception) {
-            XposedBridge.log("获取弹窗文本失败: ${e.message}")
+            XposedHelpers.findAndHookMethod(dialogClass, "show", object : XC_MethodHook() {
+                override fun beforeHookedMethod(param: MethodHookParam) {
+                    processDialog(param.thisObject as Dialog, pkg, targetRules, className, false)
+                }
+                override fun afterHookedMethod(param: MethodHookParam) {
+                    processDialog(param.thisObject as Dialog, pkg, targetRules, className, true)
+                }
+            })
+            XposedBridge.log("ComponentBlocker: $pkg Hook $className.show() 成功")
+        } catch (e: Throwable) {
+            XposedBridge.log("ComponentBlocker: $pkg Hook $className.show() 失败: ${e.message}")
         }
-        return textList
     }
-    
-    private fun collectTextViewText(view: View, textList: MutableList<String>) {
-        if (view is TextView) {
-            view.text?.toString()?.let { text ->
-                if (text.isNotBlank()) {
-                    textList.add(text)
+
+    private fun processDialog(
+        dialog: Dialog, pkg: String, targetRules: List<DialogRule>, className: String, isShown: Boolean
+    ) {
+        try {
+            val window = dialog.window ?: return
+            val decorView = window.decorView ?: return
+            val texts = collectAllTexts(decorView)
+            if (texts.isNotEmpty()) {
+                XposedBridge.log("ComponentBlocker: $pkg Dialog 文本: ${texts.take(5)}")
+            }
+            targetRules.forEachIndexed { index, rule ->
+                val matched = texts.find { rule.pattern.matcher(it).find() }
+                if (matched != null) {
+                    XposedBridge.log("ComponentBlocker: 匹配弹窗: $matched")
+                    when (rule.action) {
+                        Action.CLOSE -> if (isShown) dialog.dismiss() else dialog.cancel()
+                        Action.CANCELABLE -> {
+                            dialog.setCancelable(true)
+                            dialog.setCanceledOnTouchOutside(true)
+                        }
+                        else -> Unit
+                    }
                 }
             }
+        } catch (e: Throwable) {
+            XposedBridge.log("ComponentBlocker: 处理弹窗错误: ${e.message}")
         }
-        if (view is ViewGroup) {
-            for (i in 0 until view.childCount) {
-                collectTextViewText(view.getChildAt(i), textList)
+    }
+
+    // ==================== 原生文本替换 ====================
+    private fun hookTextViewReplace(lpparam: XC_LoadPackage.LoadPackageParam, rules: List<ComponentRule>) {
+        try {
+            val textViewClass = XposedHelpers.findClass("android.widget.TextView", lpparam.classLoader)
+            val compiledRules = rules.map {
+                CompiledTextRule(
+                    Pattern.compile(it.targetValue, Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE),
+                    it.replaceText
+                )
             }
+
+            val setTextMethods = listOf(
+                arrayOf(CharSequence::class.java),
+                arrayOf(CharSequence::class.java, TextView.BufferType::class.java)
+            )
+
+            setTextMethods.forEach { params ->
+                XposedHelpers.findAndHookMethod(textViewClass, "setText", *params, object : XC_MethodHook() {
+                    override fun beforeHookedMethod(param: MethodHookParam) {
+                        if (param.args[0] is Int) return
+                        val orig = param.args[0]?.toString() ?: return
+                        var mod = orig
+                        var changed = false
+                        compiledRules.forEach { rule ->
+                            val m = rule.pattern.matcher(mod)
+                            if (m.find()) {
+                                mod = m.replaceAll(rule.replaceText)
+                                changed = true
+                            }
+                        }
+                        if (changed) param.args[0] = mod
+                    }
+                })
+            }
+            XposedBridge.log("ComponentBlocker: ${lpparam.packageName} 文本Hook已启用")
+        } catch (e: Throwable) {
+            XposedBridge.log("ComponentBlocker: 文本Hook错误: ${e.message}")
         }
     }
-    
-    fun clearCache() {
-        packageRulesCache.clear()
-        XposedBridge.log("DialogBlocker: 缓存已清除")
+
+    private fun collectAllTexts(view: View?): List<String> = buildList {
+        view ?: return@buildList
+        try {
+            if (view is TextView) add(view.text?.toString() ?: "")
+            if (view is ViewGroup) {
+                for (i in 0 until view.childCount) {
+                    addAll(collectAllTexts(view.getChildAt(i)))
+                }
+            }
+        } catch (_: Throwable) {}
     }
+
+    private data class DialogRule(val pattern: Pattern, val action: Action?)
+    private data class CompiledTextRule(val pattern: Pattern, val replaceText: String)
 }
