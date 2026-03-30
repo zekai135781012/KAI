@@ -32,24 +32,20 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 protected void afterHookedMethod(MethodHookParam param) throws Throwable {
                     Context context = (Context) param.args[0];
                     
-                    // 初始化 ConfigManager 并传入 Context
+                    // 初始化 ConfigManager（会预加载规则）
                     ConfigManager.INSTANCE.initForXposed(context);
                     
-                    // 加载规则（无参）
-                    var rules = ConfigManager.INSTANCE.loadRules(false);
-                    XposedBridge.log("DialogBlocker: " + pkg + " 加载 " + rules.size() + " 条规则");
-                    
-                    // 调用弹窗屏蔽功能（不需要传 context）
+                    // 直接调用 ComponentBlocker（内部已预加载规则）
                     try {
-                        DialogBlocker.handleLoadPackage(lp);
+                        ComponentBlocker.INSTANCE.handleLoadPackage(lp);
                     } catch (Throwable t) {
-                        XposedBridge.log("DialogBlocker error: " + t.getMessage());
+                        XposedBridge.log("ComponentBlocker error: " + t.getMessage());
                     }
                 }
             }
         );
 
-        // 原有适配逻辑（保持不变）
+        // 原有适配逻辑
         try {
             if ("com.clover.daysmatter".equals(pkg)) {
                 DaysMatter.hookVIP(lp);
