@@ -1,504 +1,594 @@
 package com.example.kai
 
-import android.widget.Toast
-import androidx.compose.animation.*
-import androidx.compose.animation.core.*
+import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.Drawable
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+data class UserAppInfo(
+    val pkg: String,
+    val name: String,
+    val icon: Bitmap?,
+    val version: String,
+    val installTime: Long
+)
+
+fun Drawable.safeToBitmap(size: Int = 128): Bitmap? {
+    return try {
+        val targetSize = if (size <= 0) 128 else size
+        val bmp = if (this is BitmapDrawable) {
+            this.bitmap.takeIf { it.width > 0 && it.height > 0 } ?: return null
+        } else {
+            Bitmap.createBitmap(targetSize, targetSize, Bitmap.Config.ARGB_8888).apply {
+                Canvas(this).apply {
+                    setBounds(0, 0, targetSize, targetSize)
+                    draw(this)
+                }
+            }
+        }
+        bmp
+    } catch (e: Exception) {
+        null
+    }
+}
 
 @Composable
 fun ExpandScreen() {
-    val context = LocalContext.current
+    val ctx = LocalContext.current
     val scope = rememberCoroutineScope()
-    val snackbarHostState = remember { SnackbarHostState() }
-    val colors = MaterialTheme.colorScheme
-    
-    var ruleGroups by remember { mutableStateOf(listOf<RuleGroup>()) }
-    var showAddDialog by remember { mutableStateOf(false) }
-    var showJsonDialog by remember { mutableStateOf(false) }
-    var selectedGroup by remember { mutableStateOf<RuleGroup?>(null) }
-    var jsonContent by remember { mutableStateOf("") }
-    var jsonFilePath by remember { mutableStateOf("") }
-    
-    LaunchedEffect(Unit) {
-        ruleGroups = ConfigManager.getRulesGrouped()
-        jsonContent = ConfigManager.getRulesJson()
-        jsonFilePath = ConfigManager.getRulesFilePath()
+
+    var apps by remember { mutableStateOf(emptyList<UserAppInfo>()) }
+    var selected by remember { mutableStateOf<UserAppInfo?>(null) }
+    var loading by remember { mutableStateOf(true) }
+    var loadError by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = selected != null) {
+        selected = null
     }
-    
-    val refreshData = {
-        scope.launch {
-            ruleGroups = ConfigManager.getRulesGrouped()
-            jsonContent = ConfigManager.getRulesJson()
-            jsonFilePath = ConfigManager.getRulesFilePath()
+
+    LaunchedEffect(Unit) {
+        scope.launch(Dispatchers.IO) {
+            var appList = emptyList<UserAppInfo>()
+            try {
+                val pm = ctx.packageManager
+                appList = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    .filter { (it.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) == 0 }
+                    .mapNotNull { app ->
+                        try {
+                            val pkgInfo = pm.getPackageInfo(app.packageName, 0)
+                            UserAppInfo(
+                                pkg = app.packageName,
+                                name = pm.getApplicationLabel(app).toString().takeIf { it.isNotBlank() } ?: app.packageName,
+                                icon = app.loadIcon(pm).safeToBitmap(),
+                                version = pkgInfo.versionName ?: "未知版本",
+                                installTime = pkgInfo.firstInstallTime
+                            )
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                    .sortedBy { it.name }
+            } catch (e: Exception) {
+                loadError = true
+            } finally {
+                withContext(Dispatchers.Main) {
+                    apps = appList
+                    loading = false
+                }
+            }
         }
     }
-    
+
+    Crossfade(
+        targetState = selected,
+        animationSpec = tween(300),
+        label = "app_detail_transition"
+    ) { targetApp ->
+        if (targetApp != null) {
+            AppDetail(app = targetApp, onBack = { selected = null })
+        } else {
+            AppList(
+                apps = apps,
+                loading = loading,
+                loadError = loadError,
+                onSelect = { selected = it }
+            )
+        }
+    }
+}
+
+@Composable
+private fun AppList(apps: List<UserAppInfo>, loading: Boolean, loadError: Boolean, onSelect: (UserAppInfo) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    var search by remember { mutableStateOf("") }
+    var searching by remember { mutableStateOf(false) }
+
+    val filtered = remember(apps, search) {
+        if (search.isBlank()) apps else apps.filter {
+            it.name.contains(search, true) || it.pkg.contains(search, true)
+        }
+    }
+
+    Column(Modifier.fillMaxSize().navigationBarsPadding().padding(horizontal = 18.dp)) {
+        Spacer(Modifier.height(8.dp))
+
+        Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
+            if (searching) {
+                IconButton(onClick = { searching = false; search = "" }) {
+                    Icon(Icons.Filled.ArrowBack, contentDescription = null, tint = colors.primary)
+                }
+                TextField(
+                    value = search,
+                    onValueChange = { search = it },
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                    placeholder = { Text("搜索") },
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = Color.Transparent,
+                        unfocusedContainerColor = Color.Transparent,
+                        focusedIndicatorColor = Color.Transparent,
+                        unfocusedIndicatorColor = Color.Transparent
+                    ),
+                    singleLine = true
+                )
+            } else {
+                Text("应用管理", fontSize = 28.sp, fontWeight = FontWeight.Bold, color = colors.onBackground)
+                IconButton(onClick = { searching = true }) {
+                    Icon(Icons.Filled.Search, contentDescription = null, tint = colors.primary)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Divider(thickness = 0.5.dp, color = colors.onSurfaceVariant.copy(0.2f))
+        Spacer(Modifier.height(12.dp))
+
+        when {
+            loading -> Box(Modifier.fillMaxSize(), Alignment.Center) {
+                CircularProgressIndicator(color = colors.primary)
+            }
+            loadError -> Empty(text = "加载失败，请检查权限")
+            filtered.isEmpty() -> Empty(text = "暂无应用")
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(filtered, key = { it.pkg }) { AppItem(it, onSelect) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AppItem(app: UserAppInfo, onClick: (UserAppInfo) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().clickable { onClick(app) }) {
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            AppIcon(icon = app.icon, name = app.name, size = 56)
+            Column(Modifier.weight(1f)) {
+                Text(
+                    app.name,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colors.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    app.pkg,
+                    fontSize = 12.sp,
+                    color = colors.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "v${app.version}",
+                    fontSize = 11.sp,
+                    color = colors.onSurfaceVariant.copy(0.7f)
+                )
+            }
+            Icon(Icons.Filled.KeyboardArrowRight, contentDescription = null, tint = colors.onSurfaceVariant.copy(0.5f))
+        }
+        Divider(Modifier.padding(start = 70.dp), thickness = 0.5.dp, color = colors.onSurfaceVariant.copy(0.2f))
+    }
+}
+
+@Composable
+private fun AppDetail(app: UserAppInfo, onBack: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    var tab by remember { mutableIntStateOf(0) }
+    var refresh by remember { mutableIntStateOf(0) }
+
+    val rules = remember(app.pkg, refresh) {
+        try {
+            ConfigManager.getRulesForPackage(app.pkg)
+                .partition { it.targetType == TargetType.DIALOG_TEXT }
+        } catch (e: Exception) {
+            emptyList<ComponentRule>() to emptyList<ComponentRule>()
+        }
+    }
+    val (dialogRules, textRules) = rules
+
     Column(
-        modifier = Modifier
+        Modifier
             .fillMaxSize()
             .navigationBarsPadding()
             .padding(horizontal = 18.dp)
     ) {
         Spacer(Modifier.height(8.dp))
+
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                "弹窗屏蔽",
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Bold,
-                color = colors.onBackground
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                IconButton(onClick = { showJsonDialog = true }) {
-                    Icon(
-                        imageVector = KaiIcons.Code,
-                        contentDescription = "规则配置文件",
-                        tint = colors.primary
-                    )
-                }
-                IconButton(onClick = { showAddDialog = true }) {
-                    Icon(
-                        imageVector = Icons.Filled.Add,
-                        contentDescription = "添加规则",
-                        tint = colors.primary
-                    )
-                }
-            }
-        }
-        
-        Spacer(Modifier.height(16.dp))
-        
-        StatisticRow(ruleGroups)
-        
-        Spacer(Modifier.height(12.dp))
-        ThinDivider()
-        Spacer(Modifier.height(12.dp))
-        
-        if (ruleGroups.isEmpty()) {
-            EmptyState()
-        } else {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(ruleGroups, key = { it.packageName }) { group ->
-                    RuleGroupItem(
-                        group = group,
-                        onClick = { selectedGroup = group },
-                        onToggleRule = { ruleId, enabled ->
-                            ConfigManager.toggleRule(ruleId, enabled)
-                            refreshData()
-                        },
-                        onDeleteRule = { ruleId ->
-                            ConfigManager.deleteRule(ruleId)
-                            refreshData()
-                            scope.launch {
-                                snackbarHostState.showSnackbar("规则已删除")
-                            }
-                        }
-                    )
-                }
-            }
-        }
-    }
-    
-    Box(modifier = Modifier.fillMaxSize()) {
-        SnackbarHost(
-            hostState = snackbarHostState,
-            modifier = Modifier.align(Alignment.BottomCenter)
-        )
-    }
-    
-    if (showJsonDialog) {
-        JsonViewerDialog(
-            jsonContent = jsonContent,
-            filePath = jsonFilePath,
-            onDismiss = { showJsonDialog = false },
-            onRefresh = { refreshData() }
-        )
-    }
-    
-    if (showAddDialog) {
-        AddRuleDialog(
-            onDismiss = { showAddDialog = false },
-            onConfirm = { rule ->
-                scope.launch {
-                    val success = ConfigManager.addRule(rule)
-                    if (success) {
-                        refreshData()
-                        snackbarHostState.showSnackbar("规则添加成功")
-                    } else {
-                        snackbarHostState.showSnackbar("规则已存在或保存失败")
-                    }
-                }
-                showAddDialog = false
-            }
-        )
-    }
-    
-    if (selectedGroup != null) {
-        RuleGroupDetailDialog(
-            group = selectedGroup!!,
-            onDismiss = { selectedGroup = null },
-            onRuleUpdated = {
-                refreshData()
-                selectedGroup = null
-            }
-        )
-    }
-}
-
-@Composable
-private fun StatisticRow(groups: List<RuleGroup>) {
-    val totalRules = groups.sumOf { it.rules.size }
-    val enabledRules = groups.sumOf { it.enabledCount }
-    val colors = MaterialTheme.colorScheme
-    
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceEvenly
-    ) {
-        StatisticItem("应用", groups.size.toString(), colors.primary)
-        StatisticItem("规则", totalRules.toString(), colors.secondary)
-        StatisticItem("启用", enabledRules.toString(), colors.tertiary)
-    }
-}
-
-@Composable
-private fun StatisticItem(label: String, value: String, color: androidx.compose.ui.graphics.Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(
-            text = value,
-            fontSize = 24.sp,
-            fontWeight = FontWeight.Bold,
-            color = color
-        )
-        Text(
-            text = label,
-            fontSize = 12.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-}
-
-@Composable
-private fun ThinDivider() {
-    Divider(
-        thickness = 0.5.dp,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.2f)
-    )
-}
-
-@Composable
-private fun RuleGroupItem(
-    group: RuleGroup,
-    onClick: () -> Unit,
-    onToggleRule: (Long, Boolean) -> Unit,
-    onDeleteRule: (Long) -> Unit
-) {
-    val colors = MaterialTheme.colorScheme
-    var expanded by remember { mutableStateOf(false) }
-    
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier
+            Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                .clickable(onClick = onBack)
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = colors.primaryContainer,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = group.appName.firstOrNull()?.uppercase() ?: "?",
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = colors.onPrimaryContainer
-                    )
-                }
-            }
-            
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = group.appName,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colors.onSurface
-                )
-                Text(
-                    text = "${group.enabledCount}/${group.rules.size} 条规则已启用",
-                    fontSize = 13.sp,
-                    color = colors.onSurfaceVariant
-                )
-            }
-            
-            IconButton(
-                onClick = { expanded = !expanded },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = if (expanded) Icons.Filled.KeyboardArrowUp else Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "展开/收起",
-                    tint = colors.onSurfaceVariant
-                )
-            }
+            Icon(Icons.Filled.ArrowBack, contentDescription = "返回", tint = colors.primary)
+            Spacer(Modifier.width(8.dp))
+            Text("返回", fontSize = 16.sp, color = colors.primary)
         }
-        
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically() + fadeIn(),
-            exit = shrinkVertically() + fadeOut()
+
+        Spacer(Modifier.height(16.dp))
+
+        Surface(
+            shape = RoundedCornerShape(16.dp),
+            color = colors.secondaryContainer.copy(0.5f),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Column(
-                modifier = Modifier.padding(start = 52.dp, bottom = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+            Row(
+                Modifier.padding(16.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                group.rules.forEach { rule ->
-                    RuleRow(
-                        rule = rule,
-                        onToggle = { onToggleRule(rule.id, it) },
-                        onDelete = { onDeleteRule(rule.id) }
+                AppIcon(icon = app.icon, name = app.name, size = 64)
+                Column {
+                    Text(
+                        app.name,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = colors.onSurface
+                    )
+                    Text(app.pkg, fontSize = 13.sp, color = colors.onSurfaceVariant)
+                    Text(
+                        "v${app.version}",
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant.copy(0.8f)
                     )
                 }
             }
         }
-        
-        ThinDivider()
+
+        Spacer(Modifier.height(20.dp))
+
+        TabRow(
+            selectedTabIndex = tab,
+            modifier = Modifier.fillMaxWidth(),
+            containerColor = colors.surface,
+            contentColor = colors.primary
+        ) {
+            Tab(
+                selected = tab == 0,
+                onClick = { tab = 0 }
+            ) {
+                TabContent(
+                    icon = Icons.Filled.Close,
+                    label = "弹窗屏蔽",
+                    count = dialogRules.size,
+                    selected = tab == 0
+                )
+            }
+            Tab(
+                selected = tab == 1,
+                onClick = { tab = 1 }
+            ) {
+                TabContent(
+                    icon = Icons.Filled.Edit,
+                    label = "文本替换",
+                    count = textRules.size,
+                    selected = tab == 1
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        when (tab) {
+            0 -> RuleList(
+                pkg = app.pkg,
+                type = TargetType.DIALOG_TEXT,
+                rules = dialogRules,
+                onChange = { refresh++ }
+            )
+            1 -> RuleList(
+                pkg = app.pkg,
+                type = TargetType.TEXT_REPLACE,
+                rules = textRules,
+                onChange = { refresh++ }
+            )
+        }
     }
 }
 
 @Composable
-private fun RuleRow(
-    rule: ComponentRule,
-    onToggle: (Boolean) -> Unit,
-    onDelete: () -> Unit
-) {
-    val colors = MaterialTheme.colorScheme
-    
+private fun TabContent(icon: androidx.compose.ui.graphics.vector.ImageVector, label: String, count: Int, selected: Boolean) {
+    val color = if (selected) LocalContentColor.current else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        modifier = Modifier.padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = if (rule.enabled) colors.primary.copy(alpha = 0.2f) else colors.surfaceVariant,
-                    modifier = Modifier.padding(end = 8.dp)
-                ) {
-                    Text(
-                        text = if (rule.enabled) "启用" else "停用",
-                        fontSize = 10.sp,
-                        color = if (rule.enabled) colors.primary else colors.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-                
+        Icon(icon, contentDescription = null, modifier = Modifier.size(18.dp), tint = color)
+        Spacer(Modifier.width(6.dp))
+        Text("$label ($count)", color = color)
+    }
+}
+
+@Composable
+private fun RuleList(pkg: String, type: TargetType, rules: List<ComponentRule>, onChange: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    var showAdd by remember { mutableStateOf(false) }
+
+    Column(Modifier.fillMaxSize()) {
+        Button(
+            onClick = { showAdd = true },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = if (type == TargetType.TEXT_REPLACE) colors.tertiaryContainer else colors.primaryContainer,
+                contentColor = if (type == TargetType.TEXT_REPLACE) colors.onTertiaryContainer else colors.onPrimaryContainer
+            )
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text(if (type == TargetType.DIALOG_TEXT) "添加弹窗规则" else "添加替换规则")
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        if (rules.isEmpty()) {
+            Empty(if (type == TargetType.DIALOG_TEXT) "暂无弹窗规则" else "暂无替换规则")
+        } else {
+            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(rules, key = { it.id }) { RuleCard(rule = it, type = type, onChange = onChange) }
+            }
+        }
+    }
+
+    if (showAdd) AddRuleDialog(pkg = pkg, type = type, onDismiss = { showAdd = false }, onAdd = onChange)
+}
+
+@Composable
+private fun RuleCard(rule: ComponentRule, type: TargetType, onChange: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val isText = type == TargetType.TEXT_REPLACE
+    val activeColor = if (isText) colors.tertiary else colors.primary
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = if (isText) colors.tertiaryContainer.copy(0.3f) else colors.surfaceVariant.copy(0.5f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            Arrangement.SpaceBetween,
+            Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
                 Text(
-                    text = rule.targetValue.take(25),
-                    fontSize = 14.sp,
+                    rule.targetValue,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
                     color = colors.onSurface,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-            }
-            
-            if (rule.description.isNotEmpty()) {
-                Text(
-                    text = rule.description,
-                    fontSize = 12.sp,
-                    color = colors.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(top = 2.dp)
-                )
-            }
-        }
-        
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Switch(
-                checked = rule.enabled,
-                onCheckedChange = onToggle,
-                modifier = Modifier.scale(0.8f)
-            )
-            IconButton(
-                onClick = onDelete,
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    imageVector = KaiIcons.DeleteOutline,
-                    contentDescription = "删除",
-                    tint = colors.error.copy(alpha = 0.6f),
-                    modifier = Modifier.size(20.dp)
-                )
-            }
-        }
-    }
-}
 
-@Composable
-private fun EmptyState() {
-    val colors = MaterialTheme.colorScheme
-    
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 64.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Icon(
-            imageVector = KaiIcons.Block,
-            contentDescription = "暂无规则",
-            modifier = Modifier.size(56.dp),
-            tint = colors.onSurfaceVariant.copy(alpha = 0.4f)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Text(
-            text = "暂无弹窗屏蔽规则",
-            fontSize = 16.sp,
-            color = colors.onSurfaceVariant
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = "点击右上角 + 添加第一条规则",
-            fontSize = 13.sp,
-            color = colors.onSurfaceVariant.copy(alpha = 0.7f)
-        )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(top = 6.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = if (rule.enabled) activeColor.copy(0.15f) else colors.surfaceVariant
+                    ) {
+                        Text(
+                            if (rule.enabled) "已启用" else "已停用",
+                            fontSize = 11.sp,
+                            color = if (rule.enabled) activeColor else colors.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    val actionText = when {
+                        isText -> "替换为: ${rule.replaceText}"
+                        rule.action == Action.CLOSE -> "自动关闭"
+                        else -> "可取消"
+                    }
+
+                    Text(
+                        actionText,
+                        fontSize = 13.sp,
+                        color = if (isText) activeColor else colors.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Switch(
+                    checked = rule.enabled,
+                    onCheckedChange = {
+                        ConfigManager.toggleRule(rule.id, it)
+                        onChange()
+                    },
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = activeColor,
+                        checkedTrackColor = activeColor.copy(0.5f)
+                    )
+                )
+
+                IconButton(
+                    onClick = {
+                        ConfigManager.deleteRule(rule.id)
+                        onChange()
+                    },
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Filled.Delete,
+                        contentDescription = "删除",
+                        tint = colors.error.copy(0.6f),
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun AddRuleDialog(
-    onDismiss: () -> Unit,
-    onConfirm: (ComponentRule) -> Unit
-) {
-    var packageName by remember { mutableStateOf("") }
-    var targetValue by remember { mutableStateOf("") }
-    var action by remember { mutableStateOf(Action.CLOSE) }
-    var description by remember { mutableStateOf("") }
+private fun AddRuleDialog(pkg: String, type: TargetType, onDismiss: () -> Unit, onAdd: () -> Unit) {
     val colors = MaterialTheme.colorScheme
-    
+    var target by remember { mutableStateOf("") }
+    var replace by remember { mutableStateOf("") }
+    var action by remember { mutableStateOf(Action.CLOSE) }
+    var expanded by remember { mutableStateOf(false) }
+
+    val isText = type == TargetType.TEXT_REPLACE
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("添加规则") },
+        title = {
+            Text(
+                if (isText) "添加文字替换" else "添加弹窗屏蔽",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold
+            )
+        },
         containerColor = colors.surface,
+        shape = RoundedCornerShape(28.dp),
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 OutlinedTextField(
-                    value = packageName,
-                    onValueChange = { packageName = it },
-                    label = { Text("应用包名") },
-                    placeholder = { Text("com.example.app") },
+                    value = target,
+                    onValueChange = { target = it },
+                    label = { Text("匹配文本") },
+                    placeholder = { Text("输入要匹配的文本或正则") },
                     singleLine = true,
-                    leadingIcon = { Icon(imageVector = KaiIcons.Apps, contentDescription = "应用", modifier = Modifier.size(20.dp)) }
-                )
-                
-                OutlinedTextField(
-                    value = targetValue,
-                    onValueChange = { targetValue = it },
-                    label = { Text("屏蔽关键词") },
-                    placeholder = { Text("广告|VIP|会员") },
-                    singleLine = true,
-                    leadingIcon = { Icon(imageVector = Icons.Filled.Search, contentDescription = "搜索", modifier = Modifier.size(20.dp)) }
-                )
-                
-                var expanded by remember { mutableStateOf(false) }
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = it }
-                ) {
-                    OutlinedTextField(
-                        value = when(action) {
-                            Action.CLOSE -> "关闭弹窗"
-                            Action.CANCELABLE -> "可取消"
-                        },
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("操作") },
-                        leadingIcon = { Icon(imageVector = KaiIcons.TouchApp, contentDescription = "操作", modifier = Modifier.size(20.dp)) },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        modifier = Modifier.menuAnchor()
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = colors.primary,
+                        unfocusedBorderColor = colors.outline
                     )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("关闭弹窗") },
-                            onClick = { action = Action.CLOSE; expanded = false }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("设置为可取消") },
-                            onClick = { action = Action.CANCELABLE; expanded = false }
-                        )
-                    }
-                }
-                
-                OutlinedTextField(
-                    value = description,
-                    onValueChange = { description = it },
-                    label = { Text("描述（可选）") },
-                    placeholder = { Text("屏蔽广告弹窗") },
-                    singleLine = true,
-                    leadingIcon = { Icon(imageVector = KaiIcons.EditNote, contentDescription = "描述", modifier = Modifier.size(20.dp)) }
                 )
-                
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = colors.secondaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            "💡 提示",
-                            fontSize = 12.sp,
-                            color = colors.primary,
-                            fontWeight = FontWeight.Medium
+
+                if (isText) {
+                    OutlinedTextField(
+                        value = replace,
+                        onValueChange = { replace = it },
+                        label = { Text("替换为") },
+                        placeholder = { Text("输入替换后的文本") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = colors.tertiary,
+                            unfocusedBorderColor = colors.outline
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            "• 正则支持：\"广告|VIP\" 匹配任一关键词\n• 不区分大小写\n• 关闭弹窗：直接关闭匹配弹窗",
-                            fontSize = 11.sp,
-                            color = colors.onSurfaceVariant,
-                            lineHeight = 16.sp
+                    )
+                } else {
+                    Text(
+                        "操作类型",
+                        fontSize = 12.sp,
+                        color = colors.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 4.dp)
+                    )
+
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = when(action) {
+                                Action.CLOSE -> "关闭弹窗"
+                                else -> "可取消"
+                            },
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text("选择操作") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor()
                         )
+
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("关闭弹窗") },
+                                onClick = {
+                                    action = Action.CLOSE
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("可取消") },
+                                onClick = {
+                                    action = Action.CANCELABLE
+                                    expanded = false
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -506,473 +596,73 @@ private fun AddRuleDialog(
         confirmButton = {
             TextButton(
                 onClick = {
-                    if (packageName.isNotBlank() && targetValue.isNotBlank()) {
-                        onConfirm(ComponentRule(
-                            packageName = packageName.trim(),
-                            targetType = TargetType.DIALOG_TEXT,
-                            targetValue = targetValue.trim(),
-                            action = action,
-                            description = description
-                        ))
-                    }
+                    val rule = ComponentRule(
+                        packageName = pkg,
+                        targetType = type,
+                        targetValue = target.trim(),
+                        action = action,
+                        replaceText = replace.trim(),
+                        description = ""
+                    )
+                    ConfigManager.addRule(rule)
+                    onAdd(); onDismiss()
                 },
-                enabled = packageName.isNotBlank() && targetValue.isNotBlank()
+                enabled = target.isNotBlank() && (!isText || replace.isNotBlank())
             ) {
-                Text("添加")
+                Text("添加", fontWeight = FontWeight.Medium)
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        }
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RuleGroupDetailDialog(
-    group: RuleGroup,
-    onDismiss: () -> Unit,
-    onRuleUpdated: () -> Unit
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var rules by remember { mutableStateOf(group.rules) }
-    val colors = MaterialTheme.colorScheme
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(group.appName)
-                TextButton(
-                    onClick = {
-                        ConfigManager.clearAllRules()
-                        rules = emptyList()
-                        onRuleUpdated()
-                        onDismiss()
-                    }
-                ) {
-                    Text("清空全部", color = colors.error)
-                }
+            TextButton(onClick = onDismiss) {
+                Text("取消", color = colors.onSurfaceVariant)
             }
-        },
-        containerColor = colors.surface,
-        text = {
-            LazyColumn(
-                modifier = Modifier.heightIn(max = 400.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(rules, key = { it.id }) { rule ->
-                    var editing by remember { mutableStateOf(false) }
-                    
-                    if (editing) {
-                        RuleEditorCard(
-                            rule = rule,
-                            onSave = { updated ->
-                                ConfigManager.updateRule(updated)
-                                rules = rules.map { if (it.id == updated.id) updated else it }
-                                editing = false
-                                onRuleUpdated()
-                            },
-                            onCancel = { editing = false }
-                        )
-                    } else {
-                        RuleDetailRow(
-                            rule = rule,
-                            onEdit = { editing = true },
-                            onDelete = {
-                                scope.launch {
-                                    ConfigManager.deleteRule(rule.id)
-                                    rules = rules.filter { it.id != rule.id }
-                                    onRuleUpdated()
-                                }
-                            },
-                            onToggle = { enabled ->
-                                ConfigManager.toggleRule(rule.id, enabled)
-                                rules = rules.map { 
-                                    if (it.id == rule.id) it.copy(enabled = enabled) else it 
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
 }
 
 @Composable
-private fun RuleDetailRow(
-    rule: ComponentRule,
-    onEdit: () -> Unit,
-    onDelete: () -> Unit,
-    onToggle: (Boolean) -> Unit
-) {
+private fun AppIcon(icon: Bitmap?, name: String, size: Int = 56) {
     val colors = MaterialTheme.colorScheme
-    
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = colors.primaryContainer,
-                    modifier = Modifier.padding(end = 8.dp)
-                ) {
-                    Text(
-                        "关键词",
-                        fontSize = 10.sp,
-                        color = colors.onPrimaryContainer,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-                Text(
-                    text = rule.targetValue,
-                    fontSize = 15.sp,
-                    color = colors.onSurface,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Switch(
-                checked = rule.enabled,
-                onCheckedChange = onToggle,
-                modifier = Modifier.scale(0.8f)
-            )
-        }
-        
-        Row(
+    val dp = size.dp
+    if (icon != null) {
+        Image(
+            painter = BitmapPainter(icon.asImageBitmap()),
+            contentDescription = null,
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 4.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+                .size(dp)
+                .clip(RoundedCornerShape((size / 4).dp))
+        )
+    } else {
+        Surface(
+            modifier = Modifier.size(dp),
+            shape = RoundedCornerShape((size / 4).dp),
+            color = colors.primaryContainer
         ) {
-            Surface(
-                shape = RoundedCornerShape(4.dp),
-                color = colors.secondaryContainer
-            ) {
+            Box(contentAlignment = Alignment.Center) {
                 Text(
-                    text = if (rule.action == Action.CLOSE) "关闭弹窗" else "可取消",
-                    fontSize = 11.sp,
-                    color = colors.onSecondaryContainer,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    name.firstOrNull()?.uppercase() ?: "?",
+                    fontSize = (size / 2).sp,
+                    fontWeight = FontWeight.Bold,
+                    color = colors.onPrimaryContainer
                 )
-            }
-            Row {
-                IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
-                    Icon(imageVector = Icons.Filled.Edit, contentDescription = "编辑", modifier = Modifier.size(18.dp), tint = colors.primary)
-                }
-                IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
-                    Icon(imageVector = Icons.Filled.Delete, contentDescription = "删除", modifier = Modifier.size(18.dp), tint = colors.error)
-                }
-            }
-        }
-        
-        if (rule.description.isNotEmpty()) {
-            Text(
-                text = rule.description,
-                fontSize = 12.sp,
-                color = colors.onSurfaceVariant,
-                modifier = Modifier.padding(top = 4.dp)
-            )
-        }
-        
-        ThinDivider()
-    }
-}
-
-@Composable
-private fun RuleEditorCard(
-    rule: ComponentRule,
-    onSave: (ComponentRule) -> Unit,
-    onCancel: () -> Unit
-) {
-    var targetValue by remember { mutableStateOf(rule.targetValue) }
-    var description by remember { mutableStateOf(rule.description) }
-    var action by remember { mutableStateOf(rule.action) }
-    val colors = MaterialTheme.colorScheme
-    
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = colors.secondaryContainer.copy(alpha = 0.5f),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            OutlinedTextField(
-                value = targetValue,
-                onValueChange = { targetValue = it },
-                label = { Text("屏蔽关键词") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-            
-            var expanded by remember { mutableStateOf(false) }
-            ExposedDropdownMenuBox(
-                expanded = expanded,
-                onExpandedChange = { expanded = it },
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                OutlinedTextField(
-                    value = when(action) {
-                        Action.CLOSE -> "关闭弹窗"
-                        Action.CANCELABLE -> "设置为可取消"
-                    },
-                    onValueChange = {},
-                    readOnly = true,
-                    label = { Text("操作") },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                    modifier = Modifier.menuAnchor()
-                )
-                ExposedDropdownMenu(
-                    expanded = expanded,
-                    onDismissRequest = { expanded = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("关闭弹窗") },
-                        onClick = { action = Action.CLOSE; expanded = false }
-                    )
-                    DropdownMenuItem(
-                        text = { Text("设置为可取消") },
-                        onClick = { action = Action.CANCELABLE; expanded = false }
-                    )
-                }
-            }
-            
-            OutlinedTextField(
-                value = description,
-                onValueChange = { description = it },
-                label = { Text("描述") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp)
-            )
-            
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 8.dp),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onCancel) { Text("取消") }
-                TextButton(
-                    onClick = {
-                        onSave(rule.copy(
-                            targetValue = targetValue,
-                            action = action,
-                            description = description
-                        ))
-                    }
-                ) { Text("保存") }
             }
         }
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun JsonViewerDialog(
-    jsonContent: String,
-    filePath: String,
-    onDismiss: () -> Unit,
-    onRefresh: () -> Unit
-) {
-    val context = LocalContext.current
-    val clipboardManager = LocalClipboardManager.current
+private fun Empty(text: String) {
     val colors = MaterialTheme.colorScheme
-    var isFormatted by remember { mutableStateOf(true) }
-    var displayContent by remember { mutableStateOf(jsonContent) }
-    var showToastMessage by remember { mutableStateOf<String?>(null) }
-    
-    LaunchedEffect(showToastMessage) {
-        showToastMessage?.let { message ->
-            Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
-            showToastMessage = null
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = colors.onSurfaceVariant.copy(0.4f)
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(text, color = colors.onSurfaceVariant)
         }
     }
-    
-    fun formatJson(json: String): String {
-        return try {
-            org.json.JSONArray(json).toString(2)
-        } catch (e: Exception) {
-            try {
-                org.json.JSONObject(json).toString(2)
-            } catch (e2: Exception) {
-                json
-            }
-        }
-    }
-    
-    fun compactJson(json: String): String {
-        return try {
-            org.json.JSONArray(json).toString()
-        } catch (e: Exception) {
-            try {
-                org.json.JSONObject(json).toString()
-            } catch (e2: Exception) {
-                json
-            }
-        }
-    }
-    
-    LaunchedEffect(jsonContent, isFormatted) {
-        displayContent = if (isFormatted) formatJson(jsonContent) else compactJson(jsonContent)
-    }
-    
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text("规则配置")
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = colors.primaryContainer
-                ) {
-                    Text(
-                        text = if (isFormatted) "格式化" else "压缩",
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                    )
-                }
-            }
-        },
-        containerColor = colors.surface,
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 450.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = colors.secondaryContainer.copy(alpha = 0.5f),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        Text(
-                            "📁 路径",
-                            fontSize = 12.sp,
-                            color = colors.primary,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            text = filePath,
-                            fontSize = 11.sp,
-                            fontFamily = FontFamily.Monospace,
-                            color = colors.onSurfaceVariant,
-                            lineHeight = 14.sp
-                        )
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = colors.primaryContainer
-                    ) {
-                        Text(
-                            "${jsonContent.length} 字符",
-                            fontSize = 11.sp,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                    
-                    Row {
-                        IconButton(
-                            onClick = { isFormatted = !isFormatted },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = if (isFormatted) KaiIcons.FormatAlignLeft else KaiIcons.FormatAlignJustify,
-                                contentDescription = "格式切换",
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                        IconButton(
-                            onClick = {
-                                clipboardManager.setText(AnnotatedString(displayContent))
-                                showToastMessage = "已复制"
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(imageVector = KaiIcons.ContentCopy, contentDescription = "复制", modifier = Modifier.size(20.dp))
-                        }
-                        IconButton(
-                            onClick = {
-                                onRefresh()
-                                showToastMessage = "已刷新"
-                            },
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(imageVector = Icons.Filled.Refresh, contentDescription = "刷新", modifier = Modifier.size(20.dp))
-                        }
-                    }
-                }
-                
-                Spacer(modifier = Modifier.height(12.dp))
-                
-                if (displayContent.isEmpty()) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(150.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("暂无规则", color = colors.onSurfaceVariant)
-                    }
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = colors.surfaceVariant.copy(alpha = 0.3f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        LazyColumn(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 280.dp)
-                                .padding(12.dp)
-                        ) {
-                            item {
-                                Text(
-                                    text = displayContent,
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = colors.onSurface,
-                                    lineHeight = 13.sp
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
-        }
-    )
 }
