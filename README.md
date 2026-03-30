@@ -1,4 +1,4 @@
-readme_content = """# KAI - Xposed Hook 模块
+readme_content =# KAI - Xposed Hook 模块
 
 一个基于 Xposed 框架的 Android Hook 模块，提供应用 VIP 解锁、弹窗屏蔽、文本替换等功能。
 
