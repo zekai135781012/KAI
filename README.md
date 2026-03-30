@@ -32,30 +32,12 @@ readme_content = """# KAI - Xposed Hook 模块
 - **语言**: Kotlin + Java
 - **最低版本**: Android 8.0 (API 26)
 
-## 项目结构
-
-```
-com.example.kai/
-├── HookEntry.java          # Xposed 入口
-├── MainActivity.kt         # Compose 主界面
-├── ConfigManager.kt        # 规则配置管理
-├── ComponentBlocker.kt     # 弹窗/文本拦截核心
-├── ui/                     # Compose 界面组件
-│   ├── HomeScreen.kt       # 首页
-│   ├── AppsListScreen.kt   # 适配应用列表
-│   └── ExpandScreen.kt     # 应用管理/规则配置
-└── hooks/                  # 各应用 Hook 实现
-    ├── Duolingo.java
-    ├── KuaiDuiZuoYe.java
-    └── ...
-```
-
 ## 使用说明
 
 1. 安装 LSPosed 框架并启用模块
 2. 在模块作用域中勾选目标应用
 3. 重启目标应用即可生效
-4. 部分应用支持设置界面（如快对作业在设置页长按）
+4. 部分应用支持设置界面（如快对作业在设置页）
 
 ## 免责声明
 
@@ -69,5 +51,3 @@ com.example.kai/
 
 > 作者: 探长鸽鸽 | QQ群: 709496957
 """
-
-print(readme_content)
