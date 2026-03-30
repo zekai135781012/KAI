@@ -1,0 +1,35 @@
+{
+  "allFiles": [
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/KAI/app/src/main/java/com/example/kai/ExpandScreen.kt",
+      "selection": {
+        "end": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        },
+        "start": {
+          "column": 0,
+          "index": 0,
+          "line": 0
+        }
+      }
+    },
+    {
+      "file": "/storage/emulated/0/AndroidIDEProjects/KAI/app/src/main/java/com/example/kai/HomeScreen.kt",
+      "selection": {
+        "end": {
+          "column": 44,
+          "index": 2387,
+          "line": 64
+        },
+        "start": {
+          "column": 44,
+          "index": 2387,
+          "line": 64
+        }
+      }
+    }
+  ],
+  "selectedFile": "/storage/emulated/0/AndroidIDEProjects/KAI/app/src/main/java/com/example/kai/HomeScreen.kt"
+}
